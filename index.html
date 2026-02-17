@@ -26,11 +26,6 @@ canvas { display: block; }
     transition: transform 0.2s, box-shadow 0.2s;
 }
 #play-btn:hover { transform: scale(1.05); box-shadow: 0 6px 30px rgba(42,138,240,0.6); }
-.switch-link {
-    margin-top: 1.5rem; color: #8ab8d8; font-size: 1rem;
-    text-decoration: none; opacity: 0.8; transition: opacity 0.2s;
-}
-.switch-link:hover { opacity: 1; text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -38,7 +33,6 @@ canvas { display: block; }
     <h1>Fishing in Lofoten</h1>
     <p>Follow the cursor &bull; Eat the food &bull; Dodge the orcas</p>
     <button id="play-btn">Play</button>
-    <a class="switch-link" href="https://skypalovaa.github.io/snake-game/">Play with boyfriend</a>
 </div>
 <canvas id="game"></canvas>
 <script>
@@ -48,7 +42,7 @@ const SNAKE_SPEED = 2.5;
 const HEAD_SIZE = 60;
 const BODY_SIZE = 50;
 const BODY_SPACING = 36;
-const FOOD_SIZE = 60;
+const FOOD_SIZE = 90;
 const GROW_AMOUNT = 1;
 const SHRINK_AMOUNT = 1;
 const ORCA_COUNT = 3;
@@ -74,7 +68,7 @@ let gameStarted = false;
 const snakeImg = new Image();
 snakeImg.src = 'IMG_3350.jpeg';
 const foodImg = new Image();
-foodImg.src = 'IMG_6825.jpeg';
+foodImg.src = 'IMG_8749.jpeg';
 
 // ── RESIZE ──
 function resize() {
