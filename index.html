@@ -26,6 +26,11 @@ canvas { display: block; }
     transition: transform 0.2s, box-shadow 0.2s;
 }
 #play-btn:hover { transform: scale(1.05); box-shadow: 0 6px 30px rgba(42,138,240,0.6); }
+.switch-link {
+    margin-top: 1.5rem; color: #8ab8d8; font-size: 1rem;
+    text-decoration: none; opacity: 0.8; transition: opacity 0.2s;
+}
+.switch-link:hover { opacity: 1; text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -33,6 +38,7 @@ canvas { display: block; }
     <h1>Fishing in Lofoten</h1>
     <p>Follow the cursor &bull; Eat the food &bull; Dodge the orcas</p>
     <button id="play-btn">Play</button>
+    <a class="switch-link" href="https://skypalovaa.github.io/snake-game/">Play with boyfriend</a>
 </div>
 <canvas id="game"></canvas>
 <script>
