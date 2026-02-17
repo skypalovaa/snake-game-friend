@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fishing in Lofoten</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #0a1628; font-family: 'Segoe UI', Tahoma, sans-serif; }
+canvas { display: block; }
+#title-screen {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #1a2a4a 0%, #0d2847 40%, #0a3d6b 70%, #063a5c 100%);
+}
+#title-screen h1 {
+    font-size: 4rem; color: #e0f0ff; text-shadow: 0 0 30px rgba(100,180,255,0.6);
+    margin-bottom: 0.5rem; letter-spacing: 4px;
+}
+#title-screen p { color: #8ab8d8; font-size: 1.1rem; margin-bottom: 2rem; }
+#play-btn {
+    padding: 16px 48px; font-size: 1.4rem; font-weight: bold;
+    background: linear-gradient(135deg, #2a8af0, #1565c0); color: white;
+    border: none; border-radius: 50px; cursor: pointer;
+    box-shadow: 0 4px 20px rgba(42,138,240,0.4);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+#play-btn:hover { transform: scale(1.05); box-shadow: 0 6px 30px rgba(42,138,240,0.6); }
+</style>
+</head>
+<body>
+<div id="title-screen">
+    <h1>Fishing in Lofoten</h1>
+    <p>Follow the cursor &bull; Eat the food &bull; Dodge the orcas</p>
+    <button id="play-btn">Play</button>
+</div>
+<canvas id="game"></canvas>
+<script>
+(() => {
+// ── CONFIG ──
+const SNAKE_SPEED = 2.5;
+const HEAD_SIZE = 60;
+const BODY_SIZE = 50;
+const BODY_SPACING = 36;
+const FOOD_SIZE = 60;
+const GROW_AMOUNT = 1;
+const SHRINK_AMOUNT = 1;
+const ORCA_COUNT = 3;
+const ORCA_SPEED = 2.0;
+const HIT_COOLDOWN = 2000;
+
+// ── ELEMENTS ──
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const titleScreen = document.getElementById('title-screen');
+const playBtn = document.getElementById('play-btn');
+
+// ── STATE ──
+let W, H;
+let mouseX, mouseY;
+let snake, gameOver, floatingTexts, orcas, food;
+let pathHistory;
+let mountains;
+let waveOffset = 0;
+let gameStarted = false;
+
+// ── IMAGES ──
+const snakeImg = new Image();
+snakeImg.src = 'IMG_3350.jpeg';
+const foodImg = new Image();
+foodImg.src = 'IMG_8749.jpeg';
+
+// ── RESIZE ──
+function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    if (!mountains || mountains.length === 0) generateMountains();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── MOUSE ──
+canvas.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    mouseX = e.touches[0].clientX;
+    mouseY = e.touches[0].clientY;
+}, { passive: false });
+
+// ── MOUNTAINS ──
+function generateMountains() {
+    mountains = [];
+    const layerConfigs = [
+        { baseY: 0.30, peakMax: 130, peakMin: 50, majorCount: 5, color: 'hsl(220,12%,16%)', snowLine: 0.35 },
+        { baseY: 0.35, peakMax: 90, peakMin: 30, majorCount: 7, color: 'hsl(220,18%,22%)', snowLine: 0.30 },
+        { baseY: 0.40, peakMax: 55, peakMin: 15, majorCount: 9, color: 'hsl(220,22%,28%)', snowLine: 0 },
+    ];
+    for (const cfg of layerConfigs) {
+        const pts = [];
+        const baseY = H * cfg.baseY;
+        // Generate major peaks then add minor ridges between them
+        const majors = [];
+        for (let i = 0; i <= cfg.majorCount; i++) {
+            const x = (i / cfg.majorCount) * (W + 300) - 150;
+            const h = cfg.peakMin + Math.random() * (cfg.peakMax - cfg.peakMin);
+            majors.push({ x, y: baseY - h, h });
+        }
+        // Subdivide: add 2-3 minor points between each major pair
+        for (let i = 0; i < majors.length - 1; i++) {
+            pts.push(majors[i]);
+            const subs = 2 + Math.floor(Math.random() * 2);
+            for (let s = 1; s <= subs; s++) {
+                const t = s / (subs + 1);
+                const mx = majors[i].x + (majors[i + 1].x - majors[i].x) * t;
+                const avgH = majors[i].h + (majors[i + 1].h - majors[i].h) * t;
+                const minorH = avgH * (0.3 + Math.random() * 0.4);
+                pts.push({ x: mx, y: baseY - minorH, h: minorH });
+            }
+        }
+        pts.push(majors[majors.length - 1]);
+        mountains.push({ pts, baseY, color: cfg.color, snowLine: cfg.snowLine, peakMax: cfg.peakMax });
+    }
+}
+
+// ── INIT ──
+function initGame() {
+    const cx = W / 2, cy = H / 2;
+    mouseX = cx; mouseY = cy;
+    snake = { x: cx, y: cy, length: 3, angle: 0 };
+    pathHistory = [{ x: cx, y: cy }];
+    gameOver = false;
+    floatingTexts = [];
+    spawnFood();
+    initOrcas();
+}
+
+// ── FOOD ──
+function spawnFood() {
+    const margin = 80;
+    food = {
+        x: margin + Math.random() * (W - margin * 2),
+        y: margin + Math.random() * (H - margin * 2),
+        pulse: 0
+    };
+}
+
+// ── ORCAS ──
+function initOrcas() {
+    orcas = [];
+    for (let i = 0; i < ORCA_COUNT; i++) {
+        const o = {
+            x: Math.random() * W,
+            y: Math.random() * H,
+            angle: Math.random() * Math.PI * 2,
+            targetX: 0, targetY: 0,
+            tailPhase: Math.random() * Math.PI * 2,
+            lastHit: 0
+        };
+        pickOrcaWaypoint(o);
+        orcas.push(o);
+    }
+}
+
+function pickOrcaWaypoint(o) {
+    const margin = 100;
+    o.targetX = margin + Math.random() * (W - margin * 2);
+    o.targetY = margin + Math.random() * (H - margin * 2);
+}
+
+// ── UPDATE ──
+function update() {
+    if (gameOver) return;
+
+    // Snake head follows cursor
+    const dx = mouseX - snake.x;
+    const dy = mouseY - snake.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 2) {
+        const targetAngle = Math.atan2(dy, dx);
+        snake.angle = lerpAngle(snake.angle, targetAngle, 0.15);
+        const move = Math.min(SNAKE_SPEED, dist);
+        snake.x += Math.cos(snake.angle) * move;
+        snake.y += Math.sin(snake.angle) * move;
+    }
+
+    // Record path
+    const last = pathHistory[pathHistory.length - 1];
+    if (Math.hypot(snake.x - last.x, snake.y - last.y) > 2) {
+        pathHistory.push({ x: snake.x, y: snake.y });
+    }
+    // Trim excess history
+    const maxHist = snake.length * BODY_SPACING * 2 + 200;
+    if (pathHistory.length > maxHist) {
+        pathHistory = pathHistory.slice(pathHistory.length - maxHist);
+    }
+
+    // Food collision
+    const fdx = snake.x - food.x;
+    const fdy = snake.y - food.y;
+    if (Math.hypot(fdx, fdy) < (HEAD_SIZE + FOOD_SIZE) / 2 - 5) {
+        snake.length += GROW_AMOUNT;
+        // Spawn a new orca for each tail piece gained
+        const newOrca = {
+            x: Math.random() * W,
+            y: Math.random() * H,
+            angle: Math.random() * Math.PI * 2,
+            targetX: 0, targetY: 0,
+            tailPhase: Math.random() * Math.PI * 2,
+            lastHit: 0
+        };
+        pickOrcaWaypoint(newOrca);
+        orcas.push(newOrca);
+        spawnFood();
+    }
+    food.pulse += 0.05;
+
+    // Orca update
+    const now = performance.now();
+    for (const o of orcas) {
+        const odx = o.targetX - o.x;
+        const ody = o.targetY - o.y;
+        const odist = Math.hypot(odx, ody);
+        if (odist < 50) pickOrcaWaypoint(o);
+
+        const targetAngle = Math.atan2(ody, odx);
+        o.angle = lerpAngle(o.angle, targetAngle, 0.04);
+        o.x += Math.cos(o.angle) * ORCA_SPEED;
+        o.y += Math.sin(o.angle) * ORCA_SPEED;
+        o.tailPhase += 0.08;
+
+        // Orca-snake collision
+        const hdx = snake.x - o.x;
+        const hdy = snake.y - o.y;
+        if (Math.hypot(hdx, hdy) < (HEAD_SIZE / 2 + 30) && now - o.lastHit > HIT_COOLDOWN) {
+            o.lastHit = now;
+            snake.length -= SHRINK_AMOUNT;
+            floatingTexts.push({ text: '-1!', x: snake.x, y: snake.y - 30, life: 1, color: '#ff4444' });
+            if (snake.length <= 1) {
+                snake.length = 1;
+                gameOver = true;
+            }
+        }
+    }
+
+    // Floating texts
+    for (const ft of floatingTexts) {
+        ft.y -= 1.2;
+        ft.life -= 0.015;
+    }
+    floatingTexts = floatingTexts.filter(ft => ft.life > 0);
+}
+
+// ── DRAW ──
+function draw() {
+    // Background gradient
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+    skyGrad.addColorStop(0, '#1a2a4a');
+    skyGrad.addColorStop(0.3, '#0d2847');
+    skyGrad.addColorStop(0.5, '#0a3d6b');
+    skyGrad.addColorStop(1, '#042a45');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Mountains
+    for (const m of mountains) {
+        // Draw mountain silhouette with smooth bezier curves
+        ctx.beginPath();
+        ctx.moveTo(m.pts[0].x, m.baseY + 60);
+        ctx.lineTo(m.pts[0].x, m.pts[0].y);
+        for (let i = 1; i < m.pts.length; i++) {
+            const prev = m.pts[i - 1];
+            const cur = m.pts[i];
+            const cpx = (prev.x + cur.x) / 2;
+            ctx.quadraticCurveTo(prev.x, prev.y, cpx, (prev.y + cur.y) / 2);
+        }
+        const last = m.pts[m.pts.length - 1];
+        ctx.lineTo(last.x, last.y);
+        ctx.lineTo(last.x, m.baseY + 60);
+        ctx.closePath();
+        // 3D gradient: lighter at peaks, darker at base
+        const minPeakY = Math.min(...m.pts.map(p => p.y));
+        const mtnGrad = ctx.createLinearGradient(0, minPeakY, 0, m.baseY + 60);
+        mtnGrad.addColorStop(0, m.color);
+        mtnGrad.addColorStop(0.3, m.color);
+        mtnGrad.addColorStop(1, darkenColor(m.color, 0.4));
+        ctx.fillStyle = mtnGrad;
+        ctx.fill();
+
+        // Snow caps (only for layers that have a snowLine)
+        if (m.snowLine > 0) {
+            const snowThreshold = m.baseY - m.peakMax * m.snowLine;
+            ctx.save();
+            // Clip to mountain shape
+            ctx.beginPath();
+            ctx.moveTo(m.pts[0].x, m.baseY + 60);
+            ctx.lineTo(m.pts[0].x, m.pts[0].y);
+            for (let i = 1; i < m.pts.length; i++) {
+                const prev = m.pts[i - 1];
+                const cur = m.pts[i];
+                const cpx = (prev.x + cur.x) / 2;
+                ctx.quadraticCurveTo(prev.x, prev.y, cpx, (prev.y + cur.y) / 2);
+            }
+            ctx.lineTo(last.x, last.y);
+            ctx.lineTo(last.x, m.baseY + 60);
+            ctx.closePath();
+            ctx.clip();
+            // Draw snow with sunlit highlight gradient
+            const snowGrad = ctx.createLinearGradient(0, minPeakY - 20, 0, snowThreshold);
+            snowGrad.addColorStop(0, 'rgba(240,245,255,0.4)');
+            snowGrad.addColorStop(0.5, 'rgba(220,230,245,0.25)');
+            snowGrad.addColorStop(1, 'rgba(200,215,235,0.1)');
+            ctx.fillStyle = snowGrad;
+            ctx.fillRect(-200, 0, W + 400, snowThreshold);
+            ctx.restore();
+        }
+    }
+
+    // Waves
+    waveOffset += 0.015;
+    drawWaves();
+
+    // Food
+    drawFood();
+
+    // Snake body
+    drawSnakeBody();
+
+    // Snake head
+    drawCircleImage(snakeImg, snake.x, snake.y, HEAD_SIZE, '#ffd700', 4);
+
+    // Orcas
+    for (const o of orcas) drawOrca(o);
+
+    // HUD
+    drawHUD();
+
+    // Floating texts
+    for (const ft of floatingTexts) {
+        ctx.globalAlpha = ft.life;
+        ctx.font = 'bold 24px Segoe UI';
+        ctx.fillStyle = ft.color;
+        ctx.textAlign = 'center';
+        ctx.fillText(ft.text, ft.x, ft.y);
+        ctx.globalAlpha = 1;
+    }
+
+    // Game over
+    if (gameOver) drawGameOver();
+}
+
+function drawWaves() {
+    const layers = [
+        { y: H * 0.45, amp: 12, freq: 0.012, speed: 1, alpha: 0.15, color: '#4a90d9', darkColor: '#2a5a8a' },
+        { y: H * 0.52, amp: 8, freq: 0.018, speed: 1.5, alpha: 0.1, color: '#3d7ec0', darkColor: '#1e4a7a' },
+        { y: H * 0.58, amp: 6, freq: 0.025, speed: 2, alpha: 0.08, color: '#2d6aa0', darkColor: '#153a60' },
+    ];
+    for (const l of layers) {
+        // Main wave fill with depth gradient
+        ctx.beginPath();
+        ctx.moveTo(0, H);
+        for (let x = 0; x <= W; x += 4) {
+            const y = l.y + Math.sin(x * l.freq + waveOffset * l.speed) * l.amp
+                          + Math.sin(x * l.freq * 0.5 + waveOffset * l.speed * 0.7) * l.amp * 0.5;
+            ctx.lineTo(x, y);
+        }
+        ctx.lineTo(W, H);
+        ctx.closePath();
+        const waveGrad = ctx.createLinearGradient(0, l.y - l.amp, 0, l.y + l.amp + (H - l.y) * 0.5);
+        waveGrad.addColorStop(0, l.color);
+        waveGrad.addColorStop(0.4, l.darkColor);
+        waveGrad.addColorStop(1, l.darkColor);
+        ctx.fillStyle = waveGrad;
+        ctx.globalAlpha = l.alpha;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Specular highlights on wave crests
+        ctx.save();
+        ctx.globalAlpha = l.alpha * 0.6;
+        ctx.beginPath();
+        for (let x = 0; x <= W; x += 4) {
+            const y = l.y + Math.sin(x * l.freq + waveOffset * l.speed) * l.amp
+                          + Math.sin(x * l.freq * 0.5 + waveOffset * l.speed * 0.7) * l.amp * 0.5;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = 'rgba(180,220,255,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+function drawSnakeBody() {
+    const segments = getBodyPositions();
+    for (let i = segments.length - 1; i >= 0; i--) {
+        const seg = segments[i];
+        const t = i / Math.max(segments.length, 1);
+        const size = BODY_SIZE * (0.6 + 0.4 * (1 - t));
+        const hue = 120 + t * 40;
+        const sr = size / 2;
+        ctx.beginPath();
+        ctx.arc(seg.x, seg.y, sr, 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${hue}, 50%, 35%)`;
+        ctx.fill();
+        // 3D gradient shading
+        const bodyGrad = ctx.createRadialGradient(seg.x - sr * 0.35, seg.y - sr * 0.35, sr * 0.1, seg.x, seg.y, sr);
+        bodyGrad.addColorStop(0, 'rgba(255,255,255,0.3)');
+        bodyGrad.addColorStop(0.5, 'rgba(255,255,255,0)');
+        bodyGrad.addColorStop(1, 'rgba(0,0,0,0.35)');
+        ctx.fillStyle = bodyGrad;
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = `hsl(${hue}, 60%, 45%)`;
+        ctx.stroke();
+    }
+}
+
+function getBodyPositions() {
+    const positions = [];
+    let traveled = 0;
+    let segIndex = 1; // first body segment
+    for (let i = pathHistory.length - 1; i > 0 && segIndex < snake.length; i--) {
+        const px = pathHistory[i].x - pathHistory[i - 1].x;
+        const py = pathHistory[i].y - pathHistory[i - 1].y;
+        const d = Math.hypot(px, py);
+        traveled += d;
+        if (traveled >= BODY_SPACING * segIndex) {
+            positions.push({ x: pathHistory[i - 1].x, y: pathHistory[i - 1].y });
+            segIndex++;
+        }
+    }
+    return positions;
+}
+
+function drawCircleImage(img, x, y, size, borderColor, borderWidth) {
+    ctx.save();
+    // Border
+    ctx.beginPath();
+    ctx.arc(x, y, size / 2 + borderWidth, 0, Math.PI * 2);
+    ctx.fillStyle = borderColor;
+    ctx.fill();
+    // Clip
+    ctx.beginPath();
+    ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+    ctx.clip();
+    // Image - center crop
+    if (img.complete && img.naturalWidth > 0) {
+        const s = Math.min(img.naturalWidth, img.naturalHeight);
+        const sx = (img.naturalWidth - s) / 2;
+        const sy = (img.naturalHeight - s) / 2;
+        ctx.drawImage(img, sx, sy, s, s, x - size / 2, y - size / 2, size, size);
+    } else {
+        ctx.fillStyle = '#888';
+        ctx.fillRect(x - size / 2, y - size / 2, size, size);
+    }
+    // 3D sphere overlay — subtle so faces stay visible
+    const r = size / 2;
+    const sphereGrad = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
+    sphereGrad.addColorStop(0, 'rgba(255,255,255,0.25)');
+    sphereGrad.addColorStop(0.5, 'rgba(255,255,255,0)');
+    sphereGrad.addColorStop(0.85, 'rgba(0,0,0,0)');
+    sphereGrad.addColorStop(1, 'rgba(0,0,0,0.3)');
+    ctx.fillStyle = sphereGrad;
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawFood() {
+    const pulse = 1 + Math.sin(food.pulse) * 0.08;
+    const size = FOOD_SIZE * pulse;
+    const bw = 4 + Math.sin(food.pulse * 1.5) * 1.5;
+    const r = size / 2 + bw;
+    const wiggle = Math.sin(food.pulse * 2.5) * 0.25;
+
+    // Draw funny arms behind the face
+    ctx.save();
+    ctx.strokeStyle = '#e8b88a';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Left arm
+    const lx = food.x - r;
+    const ly = food.y + 4;
+    const lWig = wiggle;
+    ctx.beginPath();
+    ctx.moveTo(lx, ly);
+    ctx.lineTo(lx - 14, ly + 8 + Math.sin(lWig) * 4);
+    ctx.lineTo(lx - 22, ly + 2 + Math.sin(lWig) * 3);
+    ctx.stroke();
+    // Left fingers
+    const lfx = lx - 22, lfy = ly + 2 + Math.sin(lWig) * 3;
+    for (let f = 0; f < 3; f++) {
+        const angle = Math.PI + 0.6 - f * 0.3 + Math.sin(food.pulse * 3 + f) * 0.15;
+        ctx.beginPath();
+        ctx.moveTo(lfx, lfy);
+        ctx.lineTo(lfx + Math.cos(angle) * 8, lfy + Math.sin(angle) * 8);
+        ctx.stroke();
+    }
+
+    // Right arm
+    const rx = food.x + r;
+    const ry = food.y + 4;
+    const rWig = -wiggle;
+    ctx.beginPath();
+    ctx.moveTo(rx, ry);
+    ctx.lineTo(rx + 14, ry + 8 + Math.sin(rWig) * 4);
+    ctx.lineTo(rx + 22, ry + 2 + Math.sin(rWig) * 3);
+    ctx.stroke();
+    // Right fingers
+    const rfx = rx + 22, rfy = ry + 2 + Math.sin(rWig) * 3;
+    for (let f = 0; f < 3; f++) {
+        const angle = -0.6 + f * 0.3 + Math.sin(food.pulse * 3 + f) * 0.15;
+        ctx.beginPath();
+        ctx.moveTo(rfx, rfy);
+        ctx.lineTo(rfx + Math.cos(angle) * 8, rfy + Math.sin(angle) * 8);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    drawCircleImage(foodImg, food.x, food.y, size, '#ff69b4', bw);
+}
+
+function drawOrca(o) {
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    ctx.rotate(o.angle);
+
+    const tailWag = Math.sin(o.tailPhase) * 0.3;
+
+    // Tail
+    ctx.save();
+    ctx.rotate(tailWag);
+    ctx.beginPath();
+    ctx.moveTo(-40, 0);
+    ctx.lineTo(-58, -14);
+    ctx.lineTo(-50, 0);
+    ctx.lineTo(-58, 14);
+    ctx.closePath();
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fill();
+    ctx.restore();
+
+    // Shadow beneath orca
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.beginPath();
+    ctx.ellipse(2, 20, 38, 8, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.restore();
+
+    // Body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 40, 17, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fill();
+    // 3D gradient shading on body
+    const orcaGrad = ctx.createLinearGradient(0, -17, 0, 17);
+    orcaGrad.addColorStop(0, 'rgba(80,80,120,0.35)');
+    orcaGrad.addColorStop(0.4, 'rgba(0,0,0,0)');
+    orcaGrad.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = orcaGrad;
+    ctx.fill();
+    // Specular highlight
+    ctx.beginPath();
+    ctx.ellipse(-5, -10, 18, 5, -0.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fill();
+
+    // Belly
+    ctx.beginPath();
+    ctx.ellipse(5, 5, 28, 10, 0, 0, Math.PI);
+    ctx.fillStyle = '#e8e8f0';
+    ctx.fill();
+
+    // Dorsal fin
+    ctx.beginPath();
+    ctx.moveTo(-5, -17);
+    ctx.lineTo(2, -32);
+    ctx.lineTo(12, -17);
+    ctx.closePath();
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fill();
+
+    // Eye patch
+    ctx.beginPath();
+    ctx.ellipse(22, -5, 7, 5, 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = '#e8e8f0';
+    ctx.fill();
+
+    // Eye
+    ctx.beginPath();
+    ctx.arc(24, -5, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#111';
+    ctx.fill();
+
+    ctx.restore();
+
+    // Hit flash
+    const now = performance.now();
+    if (now - o.lastHit < 300) {
+        ctx.save();
+        ctx.globalAlpha = 0.3 * (1 - (now - o.lastHit) / 300);
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, 45, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff0000';
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+function drawHUD() {
+    ctx.font = 'bold 20px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillText(`Length: ${snake.length}`, 20, 35);
+}
+
+function drawGameOver() {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 52px Segoe UI';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Game Over', W / 2, H / 2 - 20);
+    ctx.font = '20px Segoe UI';
+    ctx.fillStyle = '#8ab';
+    ctx.fillText('Click to restart', W / 2, H / 2 + 30);
+}
+
+// ── UTIL ──
+function darkenColor(hslStr, amount) {
+    // Parse hsl(h, s%, l%) and darken by amount (0-1)
+    const m = hslStr.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
+    if (!m) return hslStr;
+    const l = Math.max(0, parseInt(m[3]) * (1 - amount));
+    return `hsl(${m[1]}, ${m[2]}%, ${Math.round(l)}%)`;
+}
+
+function lerpAngle(a, b, t) {
+    let diff = b - a;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    return a + diff * t;
+}
+
+// ── LOOP ──
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+// ── EVENTS ──
+playBtn.addEventListener('click', () => {
+    titleScreen.style.display = 'none';
+    gameStarted = true;
+    initGame();
+    loop();
+});
+
+canvas.addEventListener('click', () => {
+    if (gameOver) initGame();
+});
+
+})();
+</script>
+</body>
+</html>
